@@ -5,6 +5,7 @@
  */
 
 import yargs from 'yargs/yargs';
+
 import { hideBin } from 'yargs/helpers';
 import process from 'node:process';
 import { mcpCommand } from '../commands/mcp.js';
@@ -43,6 +44,7 @@ import {
   type HookDefinition,
   type HookEventName,
   type OutputFormat,
+  type SisyphusModeSettings,
 } from '@google/gemini-cli-core';
 import {
   type Settings,
@@ -72,6 +74,7 @@ export interface CliArgs {
   query: string | undefined;
   model: string | undefined;
   sandbox: boolean | string | undefined;
+  forever: boolean | undefined;
   debug: boolean | undefined;
   prompt: string | undefined;
   promptInteractive: string | undefined;
@@ -147,7 +150,12 @@ export async function parseArguments(
           type: 'boolean',
           description: 'Run in sandbox?',
         })
-
+        .option('forever', {
+          type: 'boolean',
+          description:
+            'Enable forever (long-running agent) mode. Uses GEMINI.md frontmatter for sisyphus engine config.',
+          default: false,
+        })
         .option('yolo', {
           alias: 'y',
           type: 'boolean',
@@ -517,6 +525,68 @@ export async function loadCliConfig(
 
   const experimentalJitContext = settings.experimental?.jitContext ?? false;
 
+  let sisyphusMode: SisyphusModeSettings | undefined;
+  const isForeverMode = argv.forever ?? false;
+
+  if (isForeverMode) {
+    try {
+      const yaml = await import('js-yaml');
+      const fsPromises = await import('node:fs/promises');
+      const path = await import('node:path');
+      const { FRONTMATTER_REGEX } = await import('@google/gemini-cli-core');
+      const { GEMINI_DIR } = await import('@google/gemini-cli-core');
+      const { DEFAULT_CONTEXT_FILENAME } = await import(
+        '@google/gemini-cli-core'
+      );
+
+      const geminiMdPath = path.default.join(
+        cwd,
+        GEMINI_DIR,
+        DEFAULT_CONTEXT_FILENAME,
+      );
+      const mdContent = await fsPromises.default.readFile(
+        geminiMdPath,
+        'utf-8',
+      );
+      const match = mdContent.match(FRONTMATTER_REGEX);
+
+      if (match) {
+        const parsed = yaml.default.load(match[1]);
+        if (parsed && typeof parsed === 'object') {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+          const frontmatter = parsed as Record<string, unknown>;
+          if (frontmatter['sisyphus']) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+            const sisyphusSettings = frontmatter['sisyphus'] as Record<
+              string,
+              unknown
+            >;
+            sisyphusMode = {
+              enabled:
+                typeof sisyphusSettings['enabled'] === 'boolean'
+                  ? sisyphusSettings['enabled']
+                  : false,
+              idleTimeout:
+                typeof sisyphusSettings['idleTimeout'] === 'number'
+                  ? sisyphusSettings['idleTimeout']
+                  : undefined,
+              prompt:
+                typeof sisyphusSettings['prompt'] === 'string'
+                  ? sisyphusSettings['prompt']
+                  : undefined,
+              a2aPort:
+                typeof sisyphusSettings['a2aPort'] === 'number'
+                  ? sisyphusSettings['a2aPort']
+                  : undefined,
+            };
+          }
+        }
+      }
+    } catch (_e) {
+      // Ignored
+    }
+  }
+
   let memoryContent: string | HierarchicalMemory = '';
   let fileCount = 0;
   let filePaths: string[] = [];
@@ -541,8 +611,11 @@ export async function loadCliConfig(
     filePaths = result.filePaths;
   }
 
-  const question = argv.promptInteractive || argv.prompt || '';
-
+  const question =
+    argv.promptInteractive ||
+    argv.prompt ||
+    process.env['GEMINI_CLI_INITIAL_PROMPT'] ||
+    '';
   // Determine approval mode with backward compatibility
   let approvalMode: ApprovalMode;
   const rawApprovalMode =
@@ -634,7 +707,8 @@ export async function loadCliConfig(
     !!argv.promptInteractive ||
     !!argv.experimentalAcp ||
     (!isHeadlessMode({ prompt: argv.prompt, query: argv.query }) &&
-      !argv.isCommand);
+      !argv.isCommand) ||
+    !!argv.forever;
 
   const allowedTools = argv.allowedTools || settings.tools?.allowed || [];
   const allowedToolsSet = new Set(allowedTools);
@@ -836,6 +910,8 @@ export async function loadCliConfig(
       ? settings.general.plan
       : (extensionPlanSettings ?? settings.general?.plan),
     enableEventDrivenScheduler: true,
+    isForeverMode,
+    sisyphusMode,
     skillsSupport: settings.skills?.enabled ?? true,
     disabledSkills: settings.skills?.disabled,
     experimentalJitContext: settings.experimental?.jitContext,
