@@ -116,6 +116,7 @@ export async function resolveConfirmation(
     getPreferredEditor: () => EditorType | undefined;
     schedulerId: string;
     onWaitingForConfirmation?: (waiting: boolean) => void;
+    systemMessage?: string;
   },
 ): Promise<ResolutionResult> {
   const { state, onWaitingForConfirmation } = deps;
@@ -138,6 +139,10 @@ export async function resolveConfirmation(
     if (!details) {
       outcome = ToolConfirmationOutcome.ProceedOnce;
       break;
+    }
+
+    if (deps.systemMessage) {
+      details.systemMessage = deps.systemMessage;
     }
 
     await notifyHooks(deps, details);
