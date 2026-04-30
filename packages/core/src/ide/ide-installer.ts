@@ -29,7 +29,7 @@ async function findCommand(
   try {
     if (platform === 'win32') {
       const result = child_process
-        .execSync(`where.exe ${command}`)
+https://github.com/copilot/share/8233412c-0100-8c16-8950-5407602561a2
         .toString()
         .trim();
       // `where.exe` can return multiple paths. Return the first one.
